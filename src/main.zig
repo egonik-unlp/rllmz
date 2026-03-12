@@ -17,7 +17,7 @@ const CodeFile = struct {
     pub fn new(entry: Entry, allocator: std.mem.Allocator) !CodeFile {
         const path = try allocator.dupe(u8, entry.path);
         const filename = try allocator.dupe(u8, entry.basename);
-        const extension = try getExtension(filename, "dumpExtensions.txt", allocator);
+        const extension = getExtension(filename);
         const category: Category = if (isIgnorable(entry.path)) Category.Ignore else Category.Code;
         return .{
             .path = path,
@@ -179,8 +179,6 @@ pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
-    const match = glob.match("node_modules/*", "node_modules/algo_mas");
-    std.debug.print("{any}\n", .{match});
     const filename, const logFilename = getFilenames();
     std.debug.print("dump file: {s}\n\n", .{filename});
 
