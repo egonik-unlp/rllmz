@@ -5,7 +5,7 @@ const cwd = std.fs.cwd;
 const Entry = std.fs.Dir.Walker.Entry;
 const File = std.fs.File;
 const Dir = std.fs.Dir;
-const CodeFileExtension = enum { rs, ts, js, zig, py, sql, css, html, ml, mli, toml, opam, other };
+const CodeFileExtension = enum { rs, ts, js, zig, py, sql, css, html, ml, mli, toml, opam, prisma, other };
 const Category = enum { Code, Ignore };
 const ingnorableDirectories: [3][]const u8 = .{ "node_modules", "target", "zig-out" };
 
@@ -17,7 +17,7 @@ const CodeFile = struct {
     pub fn new(entry: Entry, allocator: std.mem.Allocator) !CodeFile {
         const path = try allocator.dupe(u8, entry.path);
         const filename = try allocator.dupe(u8, entry.basename);
-        const extension = getExtension(filename);
+        const extension = try getExtension(filename, "dumpExtensions.txt", allocator);
         const category: Category = if (isIgnorable(entry.path)) Category.Ignore else Category.Code;
         return .{
             .path = path,
@@ -32,20 +32,9 @@ const CodeFile = struct {
     }
 
     fn getExtension(path: []const u8) CodeFileExtension {
-        // std.meta.stringToEnum(CodeFileExtension, path) orelse .other;
-        if (std.mem.endsWith(u8, path, ".rs")) return .rs;
-        if (std.mem.endsWith(u8, path, ".ts")) return .ts;
-        if (std.mem.endsWith(u8, path, ".js")) return .js;
-        if (std.mem.endsWith(u8, path, ".zig")) return .zig;
-        if (std.mem.endsWith(u8, path, ".py")) return .py;
-        if (std.mem.endsWith(u8, path, "sql")) return .sql;
-        if (std.mem.endsWith(u8, path, "css")) return .css;
-        if (std.mem.endsWith(u8, path, "html")) return .html;
-        if (std.mem.endsWith(u8, path, "ml")) return .ml;
-        if (std.mem.endsWith(u8, path, "mli")) return .mli;
-        if (std.mem.endsWith(u8, path, "toml")) return .toml;
-        if (std.mem.endsWith(u8, path, "opam")) return .opam;
-        return .other;
+        var it = std.mem.splitBackwardsScalar(u8, path, '.');
+        const extension = it.first();
+        return std.meta.stringToEnum(CodeFileExtension, extension) orelse .other;
     }
 
     fn isIgnorable(path: []const u8) bool {
