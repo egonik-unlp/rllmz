@@ -5,7 +5,7 @@ const cwd = std.fs.cwd;
 const Entry = std.fs.Dir.Walker.Entry;
 const File = std.fs.File;
 const Dir = std.fs.Dir;
-const CodeFileExtension = enum { rs, ts, js, zig, py, sql, css, html, other };
+const CodeFileExtension = enum { rs, ts, js, zig, py, sql, css, html, ml, mli, toml, opam, other };
 const Category = enum { Code, Ignore };
 const ingnorableDirectories: [3][]const u8 = .{ "node_modules", "target", "zig-out" };
 
@@ -32,6 +32,7 @@ const CodeFile = struct {
     }
 
     fn getExtension(path: []const u8) CodeFileExtension {
+        // std.meta.stringToEnum(CodeFileExtension, path) orelse .other;
         if (std.mem.endsWith(u8, path, ".rs")) return .rs;
         if (std.mem.endsWith(u8, path, ".ts")) return .ts;
         if (std.mem.endsWith(u8, path, ".js")) return .js;
@@ -40,6 +41,10 @@ const CodeFile = struct {
         if (std.mem.endsWith(u8, path, "sql")) return .sql;
         if (std.mem.endsWith(u8, path, "css")) return .css;
         if (std.mem.endsWith(u8, path, "html")) return .html;
+        if (std.mem.endsWith(u8, path, "ml")) return .ml;
+        if (std.mem.endsWith(u8, path, "mli")) return .mli;
+        if (std.mem.endsWith(u8, path, "toml")) return .toml;
+        if (std.mem.endsWith(u8, path, "opam")) return .opam;
         return .other;
     }
 
@@ -67,9 +72,12 @@ fn getGitIgnore(allocator: std.mem.Allocator, rootPath: Dir) !std.ArrayList([]co
             else => return err,
         }
     };
+    defer file.close();
     const text = try file.readToEndAlloc(allocator, 4096000);
+    defer allocator.free(text);
     var patterns = std.mem.splitScalar(u8, text, '\n');
-    while (patterns.next()) |pattern| {
+    while (patterns.next()) |pat| {
+        const pattern = try allocator.dupe(u8, pat);
         try checkablePatterns.append(allocator, pattern);
     }
     return checkablePatterns;
@@ -109,13 +117,33 @@ const CodeProject = struct {
     fn matchToGlobs(self: CodeProject, codeFileName: []const u8) bool {
         return glob.matchAny(self.gitignores.items, codeFileName);
     }
-    pub fn dumpProjectToFile(self: *CodeProject, filename: []const u8) !void {
-        std.debug.print("List of globs:\n", .{});
+    pub fn dumpProjectToFile(self: *CodeProject, filename: []const u8, log_filename: ?[]const u8) !void {
+        var logBuffer: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (logBuffer.items) |item| {
+                self.allocator.free(item);
+            }
+            logBuffer.deinit(self.allocator);
+        }
+
+        const headerMsg = try self.allocator.dupe(u8, "List of patterns:\n");
+        try logBuffer.append(self.allocator, headerMsg);
+        for (self.gitignores.items) |globito| {
+            const msg = try std.fmt.allocPrint(self.allocator, "{s}\n", .{globito});
+            try logBuffer.append(self.allocator, msg);
+        }
         var outFile = try self.rootPath.createFile(filename, .{ .truncate = true });
         defer outFile.close();
         for (self.files.items) |codeFile| {
-            const gitignoreMatch = self.matchToGlobs(codeFile.path);
-            if (gitignoreMatch & (codeFile.extension != .other)) {
+            const globMatch = self.matchToGlobs(codeFile.path);
+            //if (globMatch) {
+            for (self.gitignores.items) |globPattern| {
+                const match = glob.match(globPattern, codeFile.path);
+                const msg = try std.fmt.allocPrint(self.allocator, "file {s} match with pattern {s} = {any}\n", .{ codeFile.path, globPattern, match });
+                try logBuffer.append(self.allocator, msg);
+            }
+            // }
+            if ((globMatch) | ((codeFile.extension != .other)) & (codeFile.category == .Code)) {
                 const file = try self.rootPath.openFile(codeFile.path, .{});
                 const fileString = try file.readToEndAlloc(self.allocator, 40960000);
                 const header = try std.fmt.allocPrint(self.allocator, "\n\npath: ./{s}\n", .{codeFile.path});
@@ -123,9 +151,17 @@ const CodeProject = struct {
                     self.allocator.free(fileString);
                     self.allocator.free(header);
                 }
-                std.debug.print("Wrote {s} to dump file\n", .{codeFile.filename});
+                const msg = try std.fmt.allocPrint(self.allocator, "Wrote {s} to dump file\n", .{codeFile.filename});
+                try logBuffer.append(self.allocator, msg);
                 _ = try outFile.write(header);
                 _ = try outFile.write(fileString);
+            }
+        }
+        if (log_filename) |logFile| {
+            var outLogFile = try self.rootPath.createFile(logFile, .{ .truncate = true });
+            defer outLogFile.close();
+            for (logBuffer.items) |logItem| {
+                _ = try outLogFile.write(logItem);
             }
         }
     }
@@ -133,7 +169,6 @@ const CodeProject = struct {
         for (self.files.items) |file| {
             file.deinit(self.allocator);
         }
-
         for (self.gitignores.items) |file| {
             self.allocator.free(file);
         }
@@ -142,22 +177,25 @@ const CodeProject = struct {
     }
 };
 
-fn getFilename() []const u8 {
+fn getFilenames() struct { []const u8, ?[]const u8 } {
     var args = std.process.args();
+    // First arg is the program name.
     _ = args.next();
     const filename = args.next() orelse "file_dump.txt";
-    return filename;
+    const logFilename = args.next();
+    return .{ filename, logFilename };
 }
 
 pub fn main() !void {
     var gpa: std.heap.DebugAllocator(.{}) = .init;
     const allocator = gpa.allocator();
     defer _ = gpa.deinit();
-
-    const filename = getFilename();
+    const match = glob.match("node_modules/*", "node_modules/algo_mas");
+    std.debug.print("{any}\n", .{match});
+    const filename, const logFilename = getFilenames();
     std.debug.print("dump file: {s}\n\n", .{filename});
 
     var project = try CodeProject.parseProject(allocator, cwd(), ".");
     defer project.deinit();
-    try project.dumpProjectToFile(filename);
+    try project.dumpProjectToFile(filename, logFilename);
 }
