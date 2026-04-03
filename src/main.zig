@@ -1,5 +1,6 @@
 const std = @import("std");
 const rllmz = @import("rllmz");
+const zlob = @import("zlob");
 const glob = @import("glob");
 const cwd = std.fs.cwd;
 const Entry = std.fs.Dir.Walker.Entry;
@@ -8,7 +9,7 @@ const Dir = std.fs.Dir;
 const CodeFileExtension = enum { rs, ts, js, zig, py, sql, css, html, ml, mli, toml, opam, prisma, other };
 const Category = enum { Code, Ignore };
 const ingnorableDirectories: [3][]const u8 = .{ "node_modules", "target", "zig-out" };
-
+const manuallyIncludedFiles: [2][]const u8 = .{ "tsconfig.json", "package.json" };
 const CodeFile = struct {
     path: []const u8,
     filename: []const u8,
@@ -102,9 +103,27 @@ const CodeProject = struct {
             .gitignores = gitignores,
         };
     }
-
-    fn matchToGlobs(self: CodeProject, codeFileName: []const u8) bool {
-        return glob.matchAny(self.gitignores.items, codeFileName);
+    fn matchToSingleGlob(self: CodeProject, codeFileName: []const u8, pattern: []const u8) !bool {
+        const flags: zlob.flags.ZlobFlags = .{};
+        const paths = [_][]const u8{codeFileName};
+        const match = try zlob.matchPaths(self.allocator, pattern, &paths, flags);
+        var matchIterator = match.iterator();
+        if (matchIterator.next()) |_| {
+            return true;
+        }
+        return false;
+    }
+    fn matchToGlobs(self: CodeProject, codeFileName: []const u8) !bool {
+        const flags: zlob.flags.ZlobFlags = .{};
+        const paths = [_][]const u8{codeFileName};
+        for (self.gitignores.items) |pattern| {
+            const match = try zlob.matchPaths(self.allocator, pattern, &paths, flags);
+            var matchIterator = match.iterator();
+            if (matchIterator.next()) |_| {
+                return true;
+            }
+        }
+        return false;
     }
     pub fn dumpProjectToFile(self: *CodeProject, filename: []const u8, log_filename: ?[]const u8) !void {
         var logBuffer: std.ArrayList([]const u8) = .empty;
@@ -124,14 +143,12 @@ const CodeProject = struct {
         var outFile = try self.rootPath.createFile(filename, .{ .truncate = true });
         defer outFile.close();
         for (self.files.items) |codeFile| {
-            const globMatch = self.matchToGlobs(codeFile.path);
-            //if (globMatch) {
+            const globMatch = try self.matchToGlobs(codeFile.path);
             for (self.gitignores.items) |globPattern| {
-                const match = glob.match(globPattern, codeFile.path);
+                const match = try self.matchToSingleGlob(codeFile.path, globPattern);
                 const msg = try std.fmt.allocPrint(self.allocator, "file {s} match with pattern {s} = {any}\n", .{ codeFile.path, globPattern, match });
                 try logBuffer.append(self.allocator, msg);
             }
-            // }
             if ((globMatch) | ((codeFile.extension != .other)) & (codeFile.category == .Code)) {
                 const file = try self.rootPath.openFile(codeFile.path, .{});
                 const fileString = try file.readToEndAlloc(self.allocator, 40960000);
